@@ -18,7 +18,6 @@ from langchain.memory import ConversationSummaryBufferMemory
 from langchain_openai import ChatOpenAI
 from langchain.chains import ConversationChain
 import constants as ct
-from io import BytesIO
 
 def record_audio(audio_input_file_path):
     """
@@ -81,50 +80,50 @@ def save_to_wav(llm_response_audio, audio_output_file_path):
     # 音声出力用に一時的に作ったmp3ファイルを削除
     os.remove(temp_audio_output_filename)
 
-
-def play_wav(audio_output_file_path: str, speed: float = 1.0, delete_after: bool = True):
+def play_wav(audio_output_file_path, speed=1.0):
     """
-    Streamlitで音声を再生する（st.audio使用）
-    - PyAudioは使わずブラウザで再生
-    - 速度変更はpydubでWAVバイト列を加工
+    音声ファイルの読み上げ
     Args:
-        audio_output_file_path: 再生したいWAVファイルのパス
-        speed: 再生速度（1.0: 等速, 0.5: 半分, 2.0: 倍速 など）
-        delete_after: 再生用データ作成後に元ファイルを削除するか
+        audio_output_file_path: 音声ファイルのパス
+        speed: 再生速度（1.0が通常速度、0.5で半分の速さ、2.0で倍速など）
     """
 
-    # ① WAVを読み込み
+    # 音声ファイルの読み込み
     audio = AudioSegment.from_wav(audio_output_file_path)
-
-    # ② 速度変更（必要時のみ）
+    
+    # 速度を変更
     if speed != 1.0:
-        audio = audio._spawn(
-            audio.raw_data,
+        # frame_rateを変更することで速度を調整
+        modified_audio = audio._spawn(
+            audio.raw_data, 
             overrides={"frame_rate": int(audio.frame_rate * speed)}
-        ).set_frame_rate(audio.frame_rate)
+        )
+        # 元のframe_rateに戻すことで正常再生させる（ピッチを保持したまま速度だけ変更）
+        modified_audio = modified_audio.set_frame_rate(audio.frame_rate)
 
-    # ③ バイト列にしてStreamlitで再生
-    buf = BytesIO()
-    audio.export(buf, format="wav")
-    wav_bytes = buf.getvalue()
+        modified_audio.export(audio_output_file_path, format="wav")
 
-    # ④ ブラウザで再生
-    st.audio(wav_bytes, format="audio/wav")
+    # PyAudioで再生
+    with wave.open(audio_output_file_path, 'rb') as play_target_file:
+        p = pyaudio.PyAudio()
+        stream = p.open(
+            format=p.get_format_from_width(play_target_file.getsampwidth()),
+            channels=play_target_file.getnchannels(),
+            rate=play_target_file.getframerate(),
+            output=True
+        )
 
-    # ⑤ （任意）ダウンロードボタン
-    st.download_button(
-        "音声をダウンロード",
-        data=wav_bytes,
-        file_name="output.wav",
-        mime="audio/wav"
-    )
+        data = play_target_file.readframes(1024)
+        while data:
+            stream.write(data)
+            data = play_target_file.readframes(1024)
 
-    # ⑥ 元ファイルの削除（任意）
-    if delete_after:
-        try:
-            os.remove(audio_output_file_path)
-        except FileNotFoundError:
-            pass
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+    
+    # LLMからの回答の音声ファイルを削除
+    os.remove(audio_output_file_path)
 
 def create_chain(system_template):
     """
